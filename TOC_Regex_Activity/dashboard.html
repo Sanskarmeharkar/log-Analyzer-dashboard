@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Log Analyzer Dashboard (Regex)</title>
+<style>
+:root{--bg:#f5f6fa;--card:#fff;--text:#1b2233;--mute:#667085;--line:#e3e6ee;--accent:#2f6fdb;--ok:#1a8f4c;--warn:#d98a00;--bad:#d03a3a;--code:#eef1f8;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10141c;--card:#181e2a;--text:#e8ecf4;--mute:#9aa4b8;--line:#2a3345;--accent:#6ea0ff;--ok:#44c27a;--warn:#f0b43c;--bad:#ff6b6b;--code:#222b3b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#10141c;--card:#181e2a;--text:#e8ecf4;--mute:#9aa4b8;--line:#2a3345;--accent:#6ea0ff;--ok:#44c27a;--warn:#f0b43c;--bad:#ff6b6b;--code:#222b3b;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 2px}h2{font-size:15px;margin:0 0 10px}
+.sub{color:var(--mute);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+textarea,input{width:100%;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--code);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}
+textarea{height:150px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+button.p{background:var(--accent);border-color:var(--accent);color:#fff}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.stat b{display:block;font-size:26px;line-height:1.2}.stat span{color:var(--mute);font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mute);font-weight:600}
+td.m{font-family:ui-monospace,Menlo,Consolas,monospace}
+.bar{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:13px}
+.bar i{display:block;height:16px;border-radius:4px;min-width:4px}
+.bar em{font-style:normal;width:36px;font-family:ui-monospace,monospace}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;color:#fff}
+.ok{background:var(--ok)}.no{background:var(--bad)}
+.res{margin-top:10px;font-size:14px}
+.res table td{white-space:normal}
+.empty{color:var(--mute);font-size:13px}
+.re{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--code);padding:8px 10px;border-radius:8px;word-break:break-all;margin:6px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Log File Analyzer Dashboard</h1>
+<p class="sub">A Python backend (re module) pulls the IP, time, method, path and status out of web-server log lines and flag failed requests (4xx/5xx).</p>
+
+<div class="card">
+<h2>Log input (Apache / Nginx format)</h2>
+<textarea id="log" spellcheck="false"></textarea>
+<div class="row"><button class="p" id="go">Analyze</button><button id="sample">Load sample</button><button id="clear">Clear</button></div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="grid">
+<div class="card"><h2>Status code distribution</h2><div id="chart"></div></div>
+<div class="card"><h2>Failed requests per IP</h2><div id="ips"></div></div>
+</div>
+
+<div class="card"><h2>Failed requests (4xx / 5xx)</h2><div class="scroll" id="failed"></div></div>
+<div class="card"><h2>Invalid lines</h2><div class="scroll" id="invalid"></div></div>
+
+<div class="card">
+<h2>Check a single line</h2>
+<input id="one" spellcheck="false" value='192.168.1.10 - - [28/Oct/2026:10:15:20 +0530] "GET /index.html HTTP/1.1" 200 1043'>
+<div class="row"><button class="p" id="chk">Validate</button></div>
+<div class="res" id="res"></div>
+</div>
+
+<div class="card">
+<h2>Regular expressions used</h2>
+<div id="regs"></div>
+</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = async (url, body) => {
+  const r = await fetch(url, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {});
+  if (!r.ok) throw new Error('Server error ' + r.status);
+  return r.json();
+};
+const tbl = (head, rows) => rows.length
+  ? '<table><tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' + rows.join('') + '</table>'
+  : '<div class="empty">Nothing to show.</div>';
+const colour = c => c[0] === '5' ? 'var(--bad)' : c[0] === '4' ? 'var(--warn)' : 'var(--accent)';
+function bars(el, entries, colFn) {
+  const max = Math.max(1, ...entries.map(e => e[1]));
+  el.innerHTML = entries.length ? entries.map(([k, v]) =>
+    `<div class="bar"><em>${esc(k)}</em><i style="width:${v / max * 60}%;background:${colFn(k)}"></i>${v}</div>`).join('')
+    : '<div class="empty">No data.</div>';
+}
+async function analyze() {
+  try {
+    const r = await api('/api/analyze', {text: $('log').value});
+    const stat = (v, l) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`;
+    $('stats').innerHTML = stat(r.total, 'Total lines') + stat(r.valid, 'Valid lines') + stat(r.invalid, 'Invalid lines') +
+      stat(r.failed_count, 'Failed requests') + stat(r.unique_ips, 'Unique IPs');
+    bars($('chart'), Object.entries(r.status_counts), colour);
+    bars($('ips'), Object.entries(r.ip_counts), () => 'var(--bad)');
+    $('failed').innerHTML = tbl(['Line','IP','Method','Path','Status'], r.failed.map(f =>
+      `<tr><td>${f.n}</td><td class="m">${f.ip}</td><td>${f.method}</td><td class="m">${esc(f.path)}</td><td><span class="tag no">${f.status}</span></td></tr>`));
+    $('invalid').innerHTML = tbl(['Line','Content','Reason'], r.invalid_lines.map(b =>
+      `<tr><td>${b.n}</td><td class="m">${esc(b.line)}</td><td>${esc(b.reason)}</td></tr>`));
+  } catch (e) { $('stats').innerHTML = '<div class="empty">Could not reach the Python server: ' + esc(e.message) + '. Start it with: python server.py</div>'; }
+}
+async function check() {
+  try {
+    const d = await api('/api/check', {line: $('one').value});
+    if (!d.valid) { $('res').innerHTML = `<span class="tag no">INVALID</span> ${esc(d.reason)}`; return; }
+    $('res').innerHTML = `<span class="tag ok">VALID</span> failed request: <b>${d.failed ? 'YES' : 'NO'}</b>` +
+      '<table>' + Object.entries(d.fields).map(([k, v]) => `<tr><th>${k}</th><td class="m">${esc(v)}</td></tr>`).join('') + '</table>';
+  } catch (e) { $('res').textContent = e.message; }
+}
+async function loadSample() { $('log').value = (await api('/api/sample')).text.trim(); analyze(); }
+async function init() {
+  try {
+    const re = await api('/api/regexes');
+    $('regs').innerHTML = Object.entries(re).map(([k, v]) => `<div>${esc(k)}</div><div class="re">${esc(v)}</div>`).join('');
+  } catch (e) {}
+  await loadSample(); check();
+}
+$('go').onclick = analyze; $('chk').onclick = check; $('sample').onclick = loadSample;
+$('clear').onclick = () => { $('log').value = ''; analyze(); };
+init();
+</script>
+</body>
+</html>
